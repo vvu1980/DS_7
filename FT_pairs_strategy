@@ -1,0 +1,1219 @@
+# Import necessary libraries
+import numpy as np
+#import modin.pandas as pd
+import pandas as pd
+from pykalman import KalmanFilter
+from datetime import datetime
+from numpy import log, polyfit, sqrt, std, subtract
+import statsmodels.tsa.stattools as ts
+import statsmodels.api as sm
+import ffn
+import warnings
+warnings.filterwarnings('ignore')
+import yfinance as yf
+import datetime
+# import plotly.express as px
+# import plotly.graph_objects as go
+# from plotly.subplots import make_subplots
+from statsmodels.tsa.stattools import adfuller, stats
+import time
+
+from statistics import median
+
+import openpyxl
+from openpyxl import load_workbook
+
+import os
+import shutil
+import math
+
+def normalize_and_accumulate_series(data):
+    # take tail to drop head NA
+    return data.pct_change().cumsum()
+    
+def half_life(spread):
+    spread_lag = spread.shift(1)
+    spread_lag.iloc[0] = spread_lag.iloc[1]
+    
+    spread_ret = spread - spread_lag
+    spread_ret.iloc[0] = spread_ret.iloc[1]
+    
+    spread_lag2 = sm.add_constant(spread_lag)
+     
+    model = sm.OLS(spread_ret,spread_lag2)
+    res = model.fit()
+    halflife = int(round(-np.log(2) / res.params[1],0))
+ 
+    if halflife <= 0:
+        halflife = 1
+    return halflife
+    
+def hurst(ts):
+    """Returns the Hurst Exponent of the time series vector ts"""
+    # Create the range of lag values
+    lags = range(2, 100)
+ 
+    # Calculate the array of the variances of the lagged differences
+    tau = [sqrt(std(subtract(ts[lag:], ts[:-lag]))) for lag in lags]
+ 
+    # Use a linear fit to estimate the Hurst Exponent
+    poly = polyfit(log(lags), log(tau), 1)
+ 
+    # Return the Hurst exponent from the polyfit output
+    return poly[0]*2.0
+    
+def RF_Test(df):
+    
+#     upper_level = 2
+#     lower_level = -2
+    lot = 5000
+    trading_cap = lot
+    
+    df1['LONG_am_stock_long'] = np.nan 
+    df1['LONG_am_stock_short'] = np.nan 
+    df1['FLAG_Long'] = np.nan
+    df1['FLAG_Short'] = np.nan
+    df1['SHORT_am_stock_long'] = np.nan
+    df1['SHORT_am_stock_short'] = np.nan
+
+    df1.reset_index(inplace=True)
+
+    df1.loc[0, 'FLAG_Long'] = 'Close Long'
+    df1.loc[0,'FLAG_Short'] = 'Close Short'
+
+    df1['SHORT_value_stock_long'] = np.nan
+    df1['SHORT_value_stock_short'] = np.nan
+    df1['LONG_value_stock_long'] = np.nan
+    df1['LONG_value_stock_short'] = np.nan
+    df1['trading_cap'] = lot
+    df1['Spread_value'] = np.nan
+    df1['start_price'] = np.nan
+    df1['Net_spread_value'] = np.nan
+    df1['Trade_res'] = np.nan
+    df1['cum rets'] = np.nan
+    df1['equity'] = np.nan
+    df1.loc[0, 'Trade_res'] = 0
+    df1.loc[1, 'Trade_res'] = 0
+    df1.loc[2, 'Trade_res'] = 0
+    df1.loc[0, 'cum rets'] = 0
+    df1.loc[1, 'cum rets'] = 0
+    df1.loc[2, 'cum rets'] = 0
+    
+    # Set up num units long
+    #y-long
+    #x-short
+    df1['long_entry'] = ((df1.zScore.shift(1) > lower_level) & ( df1.zScore.shift(2) < lower_level) )
+    df1['long_exit'] = ((df1.zScore.shift(1) > -1*exitZscore) & (df1.zScore.shift(2) < -1*exitZscore)) 
+    df1.loc[df1['long_entry'],'FLAG_Long'] = 'Long'
+    df1.loc[df1['long_exit'],'FLAG_Long'] = 'Close Long'
+    df1['FLAG_Long'] = df1['FLAG_Long'].fillna(method='pad')
+
+    # Set up num units short
+    #y-Short
+    #x-Long
+    df1['short_entry'] = ((df1.zScore.shift(1) <  upper_level) & ( df1.zScore.shift(2) > upper_level) )
+    df1['short_exit'] = ((df1.zScore.shift(1) < exitZscore) & (df1.zScore.shift(2) > exitZscore) )
+    df1.loc[df1['short_entry'],'FLAG_Short'] = 'Short'
+    df1.loc[df1['short_exit'],'FLAG_Short'] = 'Close Short'
+    df1['FLAG_Short'] = df1['FLAG_Short'].fillna(method='pad')
+    
+    trades = pd.DataFrame()
+    
+    count=0
+    for i in range(1, len(df1)):
+
+        if df1.loc[i, 'FLAG_Long'] == 'Long' and df1.loc[i-1, 'FLAG_Long'] != 'Long':
+
+            df1.loc[i, 'LONG_am_stock_long'] = np.floor((trading_cap/2)/df1.loc[i, 'y_open'])
+            df1.loc[i, 'LONG_am_stock_short'] = np.floor((trading_cap/2)/df1.loc[i, 'x_open'])*-1
+            df1.loc[i, 'LONG_value_stock_long'] = df1.loc[i, 'LONG_am_stock_long'] * df1.loc[i, 'y_open']
+            df1.loc[i, 'LONG_value_stock_short'] = df1.loc[i, 'LONG_am_stock_short'] * df1.loc[i,'x_open']
+
+            trades.loc[count, 'Date_Open'] = df1.loc[i, 'Date']
+            trades.loc[count, 'Trade_Open'] = 'Long'
+            trades.loc[count, 'LONG_ticker'] = tickers[1]
+            trades.loc[count, 'LONG_am_stock'] = df1.loc[i, 'LONG_am_stock_long']
+            trades.loc[count, 'LONG_stock_price'] = df1.loc[i, 'y_open']
+            trades.loc[count, 'SHORT_ticker'] = tickers[0]
+            trades.loc[count, 'SHORT_am_stock'] = df1.loc[i, 'LONG_am_stock_short']
+            trades.loc[count, 'SHORT_stock_price'] = df1.loc[i, 'x_open']
+
+        elif df1.loc[i, 'FLAG_Long'] == 'Long' and df1.loc[i-1, 'FLAG_Long'] == 'Long':
+            df1.loc[i, 'LONG_am_stock_long'] = df1.loc[i-1, 'LONG_am_stock_long']
+            df1.loc[i, 'LONG_am_stock_short'] = df1.loc[i-1, 'LONG_am_stock_short'] 
+            df1.loc[i, 'LONG_value_stock_long'] = df1.loc[i, 'LONG_am_stock_long'] * df1.loc[i, 'y']
+            df1.loc[i, 'LONG_value_stock_short'] = df1.loc[i, 'LONG_am_stock_short'] * df1.loc[i,'x']
+
+        elif df1.loc[i, 'FLAG_Long'] != 'Long' and df1.loc[i-1, 'FLAG_Long'] == 'Long':
+            df1.loc[i, 'LONG_am_stock_long'] = 0
+            df1.loc[i, 'LONG_am_stock_short'] = 0
+            df1.loc[i, 'LONG_value_stock_long'] = 0
+            df1.loc[i, 'LONG_value_stock_short'] = 0
+            df1.loc[i, 'SHORT_value_stock_long'] = 0
+            df1.loc[i, 'SHORT_value_stock_short'] = 0
+
+            trades.loc[count, 'Date_Close'] = df1.loc[i, 'Date']
+            trades.loc[count, 'Trade_Close'] = 'Close_Long'
+            trades.loc[count, 'LONG_stock_price_close'] = df1.loc[i, 'y']
+            trades.loc[count, 'SHORT_stock_price_close'] = df1.loc[i, 'x']
+
+            count += 1 
+
+        elif df1.loc[i, 'FLAG_Long'] == 'Close Long':
+            df1.loc[i, 'LONG_am_stock_long'] = 0
+            df1.loc[i, 'LONG_am_stock_short'] = 0
+            df1.loc[i, 'LONG_value_stock_long'] = 0
+            df1.loc[i, 'LONG_value_stock_short'] = 0
+
+        if df1.loc[i, 'FLAG_Short'] == 'Short' and df1.loc[i-1, 'FLAG_Short'] != 'Short':
+
+            df1.loc[i, 'SHORT_am_stock_long'] = np.floor((trading_cap/2)/df1.loc[i, 'x_open'])
+            df1.loc[i, 'SHORT_am_stock_short'] = np.floor((trading_cap/2)/df1.loc[i, 'y_open'])*-1
+            df1.loc[i, 'SHORT_value_stock_long'] = df1.loc[i, 'SHORT_am_stock_long'] * df1.loc[i, 'x_open']
+            df1.loc[i, 'SHORT_value_stock_short'] = df1.loc[i, 'SHORT_am_stock_short'] * df1.loc[i,'y_open']
+
+            trades.loc[count, 'Date_Open'] = df1.loc[i, 'Date']
+            trades.loc[count, 'Trade_Open'] = 'Short'
+            trades.loc[count, 'LONG_ticker'] = tickers[0]
+            trades.loc[count, 'LONG_am_stock'] = df1.loc[i, 'SHORT_am_stock_long']
+            trades.loc[count, 'LONG_stock_price'] = df1.loc[i, 'x_open']
+            trades.loc[count, 'SHORT_ticker'] = tickers[1]
+            trades.loc[count, 'SHORT_am_stock'] = df1.loc[i, 'SHORT_am_stock_short']
+            trades.loc[count, 'SHORT_stock_price'] = df1.loc[i, 'y_open']        
+
+        elif df1.loc[i, 'FLAG_Short'] == 'Short' and df1.loc[i-1, 'FLAG_Short'] == 'Short':
+            df1.loc[i, 'SHORT_am_stock_long'] = df1.loc[i-1, 'SHORT_am_stock_long']
+            df1.loc[i, 'SHORT_am_stock_short'] = df1.loc[i-1, 'SHORT_am_stock_short']
+            df1.loc[i, 'SHORT_value_stock_long'] = df1.loc[i, 'SHORT_am_stock_long'] * df1.loc[i, 'x']
+            df1.loc[i, 'SHORT_value_stock_short'] = df1.loc[i, 'SHORT_am_stock_short'] * df1.loc[i,'y']
+
+        elif df1.loc[i, 'FLAG_Short'] != 'Short' and df1.loc[i-1, 'FLAG_Short'] == 'Short':
+            df1.loc[i, 'SHORT_am_stock_long'] = 0
+            df1.loc[i, 'SHORT_am_stock_short'] = 0
+            df1.loc[i, 'SHORT_value_stock_long'] = 0
+            df1.loc[i, 'SHORT_value_stock_short'] = 0
+            df1.loc[i, 'LONG_value_stock_long'] = 0
+            df1.loc[i, 'LONG_value_stock_short'] = 0
+
+            trades.loc[count, 'Date_Close'] = df1.loc[i, 'Date']
+            trades.loc[count, 'Trade_Close'] = 'Close_Short'
+            trades.loc[count, 'LONG_stock_price_close'] = df1.loc[i, 'x']
+            trades.loc[count, 'SHORT_stock_price_close'] = df1.loc[i, 'y']
+
+            count += 1 
+
+        elif df1.loc[i, 'FLAG_Short'] == 'Close Short':
+            df1.loc[i, 'SHORT_am_stock_long'] = 0
+            df1.loc[i, 'SHORT_am_stock_short'] = 0        
+            df1.loc[i, 'SHORT_value_stock_long'] = 0
+            df1.loc[i, 'SHORT_value_stock_short'] = 0
+
+    df1['Spread_value'] = df1['SHORT_value_stock_long'] + df1['SHORT_value_stock_short'] + df1['LONG_value_stock_long']  + df1['LONG_value_stock_short']
+
+    df1['Trade_res'] = np.nan
+    for i in range(1, len(df1)):
+        if df1.loc[i, 'Spread_value'] != 0 and df1.loc[i-1, 'Spread_value'] == 0:
+            df1.loc[i, 'start_price'] = df1.loc[i, 'Spread_value']
+        elif df1.loc[i, 'Spread_value'] != 0 and df1.loc[i-1, 'start_price'] != 0:
+            df1.loc[i, 'start_price'] = df1.loc[i-1, 'start_price']
+        elif df1.loc[i, 'Spread_value'] == 0 and df1.loc[i-1, 'Spread_value'] != 0 and df1.loc[i-1, 'start_price'] != 0:
+            df1.loc[i, 'start_price'] = 0
+        else:
+            df1.loc[i, 'start_price'] = 0
+
+
+        #elif df1.loc[i, 'Spread_value'] == 0 and df1.loc[i-1, 'Spread_value'] != 0:
+        #    df1.loc[i, 'start_price'] = 0
+        #else:
+        #    df1.loc[i, 'start_price'] = 0
+        df1.loc[i, 'Net_spread_value'] = df1.loc[i, 'Spread_value'] - df1.loc[i, 'start_price']
+
+        if df1.loc[i, 'Spread_value'] == 0 and df1.loc[i-1, 'Spread_value'] != 0:
+            df1.loc[i, 'Trade_res'] = df1.loc[i-1, 'Net_spread_value']
+        else:    
+            df1.loc[i, 'Trade_res'] = 0
+
+    df1['cum rets'] = df1['Trade_res'].cumsum()
+    df1['trading_cap'] = lot
+    df1['equity'] = df1['Net_spread_value'] + df1['cum rets'] + df1['trading_cap']
+    try:
+        trades['Rezult'] = (trades['LONG_stock_price_close'] - trades['LONG_stock_price']) * trades['LONG_am_stock'] + (trades['SHORT_stock_price_close'] - trades['SHORT_stock_price']) * trades['SHORT_am_stock']
+        trades['Cum_Rezult'] = trades['Rezult'].cumsum()
+
+        trades['Days_in_Trade'] = trades['Date_Close'] - trades['Date_Open']
+        trades['Days_in_Trade'] = trades['Days_in_Trade']/np.timedelta64(1,'D')
+
+        temp_trades = trades[trades['Date_Close'].notna()]
+        for s in range(len(temp_trades)):
+
+
+            ope_n = temp_trades.loc[s, 'Date_Open']
+            clo_se = temp_trades.loc[s, 'Date_Close']
+
+            temp_df = df1[(df1['Date'] >= ope_n) & (df1['Date'] <= clo_se)]
+            trades.loc[s, 'Max_Drawdown'] = temp_df['Spread_value'].min() - temp_df.loc[temp_df.index[0], 'Spread_value']
+
+            if trades.loc[s, 'Rezult'] > 0:
+                trades.loc[s, 'Win_or_Loss'] = 'Win'
+            else:
+                trades.loc[s, 'Win_or_Loss'] = 'Loss'
+
+        trades=trades[trades['Date_Open'].notna()] 
+
+        Rec_Factor = round(trades['Rezult'].sum() / trades['Max_Drawdown'].min() *-1,2)
+    except:
+        Rec_Factor = 0
+        
+    return Rec_Factor
+    
+year_s = 3
+day_s = 365
+year_param = year_s*day_s
+param = 30
+
+PValue_limit_out = 1
+PValue_limit_in = PValue_limit_out + 0.1
+
+upper_level = 2
+lower_level = -2
+exitZscore = -1
+exitZscore_Long =  1
+exitZscore_Short =  -1
+trading_cap = 5000
+DIT_Lim = 1000
+corr_level = 0.85
+coint_open_check = 0.1
+coint_change = 0.27
+RF_Level = 4.5
+
+param_low = 10
+param_high = 100
+
+#years = [1,2,3,4,5,7,9] #История для отбор пар по коинтеграции
+years = [3]
+#year_list = [1,2,3,4,5,7,9] #История для расчета HalfLife
+year_list = [3]
+folder = 'list_from_TOS'
+
+delisted_tickers = pd.read_excel('delisted_stocks.xlsx')['Symbol'].unique().tolist()
+delisted_tickers
+
+list_of_files = [
+    'coint_list_RF_2016-1-1.xlsx',
+
+ 'coint_list_RF_2016-4-1.xlsx',
+ 'coint_list_RF_2016-7-1.xlsx',
+     'coint_list_RF_2016-10-1.xlsx',
+ 'coint_list_RF_2017-1-1.xlsx',
+
+ 'coint_list_RF_2017-4-1.xlsx',
+ 'coint_list_RF_2017-7-1.xlsx',
+     'coint_list_RF_2017-10-1.xlsx',
+ 'coint_list_RF_2018-1-1.xlsx',
+
+ 'coint_list_RF_2018-4-1.xlsx',
+ 'coint_list_RF_2018-7-1.xlsx',
+     'coint_list_RF_2018-10-1.xlsx',
+ 'coint_list_RF_2019-1-1.xlsx',
+
+ 'coint_list_RF_2019-4-1.xlsx',
+ 'coint_list_RF_2019-7-1.xlsx',
+     'coint_list_RF_2019-10-1.xlsx',
+ 'coint_list_RF_2020-1-1.xlsx',
+
+ 'coint_list_RF_2020-4-1.xlsx',
+ 'coint_list_RF_2020-7-1.xlsx',
+     'coint_list_RF_2020-10-1.xlsx',
+ 'coint_list_RF_2021-1-1.xlsx',
+
+ 'coint_list_RF_2021-4-1.xlsx',
+ 'coint_list_RF_2021-7-1.xlsx',
+     'coint_list_RF_2021-10-1.xlsx',
+ 'coint_list_RF_2022-1-1.xlsx',
+ 'coint_list_RF_2022-4-1.xlsx',
+ 'coint_list_RF_2022-7-1.xlsx',
+ 'coint_list_RF_2022-10-1.xlsx']
+ 
+ start_time = time.time()
+
+for year in years:
+#     path = 'c:\\Users\\VladV\\Documents\\StocksPair\\Test_rezult\\Forward_Test_Jul22\\coint_pairs_from_2016\\'
+
+#     list_of_files = os.listdir(path)
+    
+#     FT_portfolio_trades = pd.DataFrame()
+#     Full_coint_pairs = pd.DataFrame()
+    for year_s  in year_list:
+
+        FT_portfolio_trades = pd.DataFrame()
+        Full_coint_pairs = pd.DataFrame()
+
+        for file in list_of_files:
+            print()
+            print(file)
+            print()
+            coint_pairs = pd.read_excel(f'c:\\Users\\VladV\\Documents\\StocksPair\\Test_rezult\\Corp_Event_Test\\Sector_Test\\coint_list_RF\\{file}')
+
+            Full_coint_pairs = pd.concat([Full_coint_pairs, coint_pairs], axis = 0)
+
+            test_date = file[12:-5]
+
+            for z in range(len(coint_pairs)):
+                if coint_pairs.loc[z, 'Ticker_1'] == 'BRK-B':
+                    coint_pairs.loc[z, 'Ticker_1'] = 'BRK_B'
+                    print('BRK-B changed')
+                if coint_pairs.loc[z, 'Ticker_2'] == 'BRK-B':
+                    coint_pairs.loc[z, 'Ticker_2'] = 'BRK_B'
+                    print('BRK-B changed')
+
+            coint_pairs['Start_trading']=pd.to_datetime(coint_pairs['Start_trading']).dt.date
+            coint_pairs['Stop_trading']=pd.to_datetime(coint_pairs['Stop_trading']).dt.date
+
+            Start_trading = coint_pairs.loc[0, 'Start_trading']
+            Stop_trading = coint_pairs.loc[0, 'Stop_trading']
+
+            for j in range(len(coint_pairs)):
+                coint_time = time.time()                
+                
+                start = Start_trading - pd.Timedelta(365*year_s+100, unit = 'd')
+                end = Stop_trading + pd.Timedelta(365, unit = 'd')
+                
+                if coint_pairs.loc[j, 'RF'] < RF_Level:
+                    print('--RF_Level is low--')
+                    continue
+
+                stock_1 = coint_pairs.loc[j, 'Ticker_1']
+                stock_2 = coint_pairs.loc[j, 'Ticker_2']
+                
+                if stock_1 == 'FB' or stock_2 == 'FB':
+                    continue
+                
+                tickers = [stock_1, stock_2]
+                print(*tickers)
+                pair_name = stock_1+'-'+stock_2
+                
+                if pair_name == 'META-FB':
+                    continue
+                
+                industry = coint_pairs.loc[j, 'Ticker_1_Industry']
+
+                pair_coint = coint_pairs.loc[j, 'Pair_Coint']
+                spread_station = coint_pairs.loc[j, 'Spread_station']
+                correlation = coint_pairs.loc[j, 'Correlation']
+
+                symbol_1 = pd.read_csv(f'c:\\Users\\VladV\\Documents\\StocksPair\\Stock_DATA\\{stock_1}.csv')
+                symbol_2 = pd.read_csv(f'c:\\Users\\VladV\\Documents\\StocksPair\\Stock_DATA\\{stock_2}.csv')
+
+                symbol_1['Date'] = pd.to_datetime(symbol_1['Date'])
+                symbol_2['Date'] = pd.to_datetime(symbol_2['Date'])
+
+                symbol_1 = symbol_1[(symbol_1['Date'] >= start.strftime('%Y-%m-%d')) & (symbol_1['Date'] <= end.strftime('%Y-%m-%d'))]
+                symbol_2 = symbol_2[(symbol_2['Date'] >= start.strftime('%Y-%m-%d')) & (symbol_2['Date'] <= end.strftime('%Y-%m-%d'))]
+
+#                 symbol_1.drop(['High', 'Low', 'Adj Close', 'Volume'], axis = 1, inplace=True)
+#                 symbol_2.drop(['High', 'Low', 'Adj Close', 'Volume'], axis = 1, inplace=True)
+
+                symbol_1.set_index('Date',  inplace=True)
+                symbol_2.set_index('Date',  inplace=True)
+
+                if len(symbol_1) == 0 or len(symbol_2) == 0:
+                    continue
+
+                df1 = pd.DataFrame()
+                df1['y'] = symbol_2['Close']#Close_price
+                df1['x'] = symbol_1['Close'] #Close_price
+                df1['y_open'] = symbol_2['Open'] #Open_price
+                df1['x_open'] = symbol_1['Open'] #Open_price
+
+                df1.reset_index(inplace = True)
+
+                if len(df1[df1['Date'] <= Start_trading.strftime('%Y-%m-%d')]) < 252*year_s :
+                    continue
+
+                df1['spread'] = df1.y / df1.x
+                df1 = df1[df1['spread'].isna() == False]
+                df1['spread'].replace([np.inf, -np.inf], 0, inplace = True)
+
+                df1.reset_index(inplace = True, drop = True)
+                print('Длина df1 ',len(df1))
+
+                history = round(len(df1) / 252, 2)
+
+                df1.set_index('Date', inplace = True, drop = True)
+
+                df2 = df1[(df1.index >= (Start_trading - pd.Timedelta(365 * year_s, unit = 'd')).strftime('%Y-%m-%d'))&(df1.index <= Start_trading.strftime('%Y-%m-%d'))]
+                print('Длина df2 -', len(df2))
+
+                half_life_p = half_life(df2['spread'])
+                if half_life_p > param_high:
+                    std = param_high
+                    sma = param_high
+                elif half_life_p < param_low:
+                    std = param_low
+                    sma = param_low                    
+                else:
+                    std = half_life_p
+                    sma = half_life_p
+#                 sma = std = coint_pairs.loc[j, 'Param']
+#                 print('Param -', sma)
+
+                print(pair_name, sma, std)
+
+
+                meanSpread = df1.spread.rolling(window=sma).mean()
+                stdSpread = df1.spread.rolling(window=std).std()
+
+#                 upper_level = coint_pairs.loc[j, 'Upper']
+#                 lower_level = coint_pairs.loc[j, 'Lower']
+#                 #exitZscore = -1
+#                 exitZscore_Long = coint_pairs.loc[j, 'Close_Long']
+#                 exitZscore_Short = coint_pairs.loc[j, 'Close_Short']
+#                 #trading_cap = 5000
+
+                df1['zScore'] = (df1.spread-meanSpread)/stdSpread
+                df1 = df1[df1['zScore'].isna() == False]
+
+#                 Rec_f = coint_pairs.loc[j, 'RF']
+                Rec_f = RF_Test(df1)
+                if Rec_f < RF_Level:
+                    print('RF_Level ', RF_Level, '--- Recovery Factor is low -', Rec_f)
+                    print(' Time -', ' time -', (time.time() - coint_time)//60, 'минут', round((time.time() - coint_time)%60, 2), 'секунд')
+                    continue
+                else:
+                    print('RF_Level ', RF_Level, '--- Recovery Factor is OK -', Rec_f)
+
+                previous_trades = FT_portfolio_trades
+
+
+                df1['coint'] = np.nan
+                df1['stat_spread'] = np.nan
+                #df1['coint_change'] = np.nan
+
+                df1.reset_index(inplace = True)
+
+                for d in range(1, len(df1)):
+                    end_d = df1.loc[d, 'Date']
+                    start_d = end_d - pd.Timedelta(365 * year_s, unit = 'd')
+
+                    symbol_1 = pd.read_csv(f'c:\\Users\\VladV\\Documents\\StocksPair\\Stock_DATA\\{stock_1}.csv')
+                    symbol_2 = pd.read_csv(f'c:\\Users\\VladV\\Documents\\StocksPair\\Stock_DATA\\{stock_2}.csv')
+
+                    symbol_1['Date'] = pd.to_datetime(symbol_1['Date'])
+                    symbol_2['Date'] = pd.to_datetime(symbol_2['Date'])
+
+                    symbol_1 = symbol_1[(symbol_1['Date'] >= start_d.strftime('%Y-%m-%d')) & (symbol_1['Date'] <= end_d.strftime('%Y-%m-%d'))]
+                    symbol_2 = symbol_2[(symbol_2['Date'] >= start_d.strftime('%Y-%m-%d')) & (symbol_2['Date'] <= end_d.strftime('%Y-%m-%d'))]
+
+#                     symbol_1.drop(['High', 'Low', 'Adj Close', 'Volume'], axis = 1, inplace=True)
+#                     symbol_2.drop(['High', 'Low', 'Adj Close', 'Volume'], axis = 1, inplace=True)
+
+                    symbol_1.set_index('Date',  inplace=True)
+                    symbol_2.set_index('Date',  inplace=True)
+
+                    df_coint = pd.DataFrame()
+                    df_coint['y'] = symbol_2['Close']#Close_price
+                    df_coint['x'] = symbol_1['Close'] #Close_price
+
+                    df_coint=df_coint[df_coint['y'].notna()==True]
+                    df_coint=df_coint[df_coint['x'].notna()==True]
+                    df_coint['spread'] = df_coint['y'] / df_coint['x']
+                    df1.loc[d, 'stat_spread'] = round(ts.adfuller(df_coint['spread'])[1],4)
+
+                    df_coint = normalize_and_accumulate_series(df_coint)
+                    df_coint = df_coint[2:]
+
+                    df1.loc[d, 'coint'] = round(sm.tsa.stattools.coint(df_coint['y'], df_coint['x'])[1],4)
+                    #df1.loc[d, 'coint_change'] = round(df1.loc[d, 'coint'] / df1.loc[d-1, 'coint'], 4)
+
+
+                print("df1['coint'], df1.['stat_spread'] -- ready! ")
+                df_c = df1.copy()
+                df_c.reset_index(inplace = True)
+                
+                df1.set_index('Date', inplace = True, drop = True)    
+                if len(previous_trades) == 0:
+                    df1 = df1[df1.index >= Start_trading.strftime('%Y-%m-%d')]
+
+                else:
+                    t_ = pd.DataFrame()
+                    if pair_name in previous_trades['Stock_Pair'].unique().tolist():
+                        t_ = previous_trades[previous_trades['Stock_Pair'] == pair_name]
+                        
+                        if 'Date_Close' not in t_.columns.tolist():
+                            continue
+
+                        elif pd.isna(t_.iloc[-1]['Date_Close']) == True:
+                            continue
+                        
+                        elif t_.iloc[-1]['Date_Close'] > Start_trading:
+                            df1 = df1[df1.index >= t_.iloc[-1]['Date_Close']]
+
+                        else:
+                            df1 = df1[df1.index >= Start_trading.strftime('%Y-%m-%d')]
+                    else:
+                        df1 = df1[df1.index >= Start_trading.strftime('%Y-%m-%d')]
+    
+    
+                df1['LONG_am_stock_long'] = np.nan 
+                df1['LONG_am_stock_short'] = np.nan 
+                df1['FLAG_Long'] = np.nan
+                df1['Days_from_signal'] = np.nan
+                df1['coint_start'] = np.nan
+                df1['coint_change'] = np.nan
+                df1['FLAG_Short'] = np.nan
+                df1['SHORT_am_stock_long'] = np.nan
+                df1['SHORT_am_stock_short'] = np.nan
+
+                df1.reset_index(inplace = True)
+                if len(df1) > 0 and df1.loc[0, 'Date'].date() <= Stop_trading:
+                    print('---First Day ', df1.loc[0, 'Date'].date())
+                else:
+                    print('---First Day is out of range Start_trading - Stop_trading ---')
+                    continue
+
+                df1.loc[0, 'FLAG_Long'] = 'Close Long'
+                df1.loc[0,'FLAG_Short'] = 'Close Short'
+
+                df1['SHORT_value_stock_long'] = 0
+                df1['SHORT_value_stock_short'] = 0
+                df1['LONG_value_stock_long'] = 0
+                df1['LONG_value_stock_short'] = 0
+                df1['trading_cap'] = trading_cap
+                df1['Spread_value'] = np.nan
+                df1['start_price'] = np.nan
+                df1['Net_spread_value'] = np.nan
+                df1['Trade_res'] = np.nan
+                df1['cum rets'] = np.nan
+                df1['equity'] = np.nan
+                df1.loc[0, 'Trade_res'] = 0
+                df1.loc[1, 'Trade_res'] = 0
+                df1.loc[2, 'Trade_res'] = 0
+                df1.loc[0, 'cum rets'] = 0
+                df1.loc[1, 'cum rets'] = 0
+                df1.loc[2, 'cum rets'] = 0
+
+                for a in range(2, len(df1)):
+
+                    #Открытие длинной позиции
+                    if df1.loc[a, 'zScore'] > lower_level and df1.loc[a-1, 'zScore'] < lower_level and df1.loc[a, 'stat_spread'] < coint_open_check:
+                        df1.loc[a, 'FLAG_Long'] = 'Long'
+                        df1.loc[a, 'Days_from_signal'] = 1
+                        df1.loc[a, 'coint_start'] = df1.loc[a, 'coint']
+                        df1.loc[a, 'coint_change'] = df1.loc[a, 'coint'] - df1.loc[a, 'coint_start']  
+                        #print('Открытие длинной позиции ---Spread_PValue ', df1.loc[a-1, 'Spread_PValue'])
+
+                    #Открытие короткой позиции
+                    if df1.loc[a, 'zScore'] < upper_level and df1.loc[a-1, 'zScore'] > upper_level and df1.loc[a, 'stat_spread'] < coint_open_check:
+                        df1.loc[a, 'FLAG_Short'] = 'Short'
+                        df1.loc[a, 'Days_from_signal'] = 1
+                        df1.loc[a, 'coint_start'] = df1.loc[a, 'coint']
+                        df1.loc[a, 'coint_change'] = df1.loc[a, 'coint'] - df1.loc[a, 'coint_start'] 
+                        #print('Открытие короткой позиции ---Spread_PValue ', df1.loc[a-1, 'Spread_PValue'])
+
+                    #Держим длинную позицию
+                    if df1.loc[a-1, 'FLAG_Long'] == 'Long': 
+                        df1.loc[a, 'FLAG_Long'] = 'Long'
+                        df1.loc[a, 'FLAG_Short'] = 'Close Short'
+                        df1.loc[a, 'Days_from_signal'] = 1 + df1.loc[a-1, 'Days_from_signal']
+                        df1.loc[a, 'coint_start'] = df1.loc[a-1, 'coint_start']
+                        df1.loc[a, 'coint_change'] = df1.loc[a, 'coint'] - df1.loc[a, 'coint_start'] 
+
+                    #Держим короткую позицию   
+                    if df1.loc[a-1, 'FLAG_Short'] == 'Short':
+                        df1.loc[a, 'FLAG_Long'] = 'Close Long'
+                        df1.loc[a, 'FLAG_Short'] = 'Short'
+                        df1.loc[a, 'Days_from_signal'] = 1 + df1.loc[a-1, 'Days_from_signal']
+                        df1.loc[a, 'coint_start'] = df1.loc[a-1, 'coint_start']
+                        df1.loc[a, 'coint_change'] = df1.loc[a, 'coint'] - df1.loc[a, 'coint_start'] 
+
+                    # Закрываем длинную позицию exitZscore_Long = 1
+                    if (df1.loc[a, 'zScore'] > exitZscore_Long and df1.loc[a-1, 'zScore'] < exitZscore_Long and df1.loc[a, 'FLAG_Short'] != 'Short') or (df1.loc[a-1, 'Days_from_signal'] >= DIT_Lim and df1.loc[a-1, 'FLAG_Short'] != 'Short') or (df1.loc[a, 'coint_change']  >= coint_change and df1.loc[a, 'FLAG_Short'] != 'Short'):  
+
+                        df1.loc[a, 'FLAG_Long'] = 'Close Long'
+                        df1.loc[a, 'Days_from_signal'] = 0 
+                        df1.loc[a, 'coint_start'] = 0
+                        df1.loc[a, 'coint_change'] = 0
+                        #print('Закрытие длинной позиции ---Spread_PValue ', df1.loc[a-1, 'Spread_PValue'])
+
+                    # Закрываем короткую позицию    exitZscore_Short = -1
+                    if (df1.loc[a, 'zScore'] < exitZscore_Short and df1.loc[a-1, 'zScore'] > exitZscore_Short and df1.loc[a, 'FLAG_Long'] != 'Long') or (df1.loc[a-1, 'Days_from_signal'] >= DIT_Lim and df1.loc[a-1, 'FLAG_Long'] != 'Long') or (df1.loc[a, 'coint_change']  >= coint_change and df1.loc[a, 'FLAG_Long'] != 'Long'):
+                        df1.loc[a, 'FLAG_Short'] = 'Close Short'
+                        df1.loc[a, 'Days_from_signal'] = 0
+                        df1.loc[a, 'coint_start'] = 0
+                        df1.loc[a, 'coint_change'] = 0 
+                        #print('Закрытие короткой позиции ---Spread_PValue ', df1.loc[a-1, 'Spread_PValue'])
+
+                df1['FLAG_Long'] = df1['FLAG_Long'].fillna(method='ffill')
+                df1['FLAG_Short'] = df1['FLAG_Short'].fillna(method='ffill')
+                df1['Days_from_signal'] = df1['Days_from_signal'].fillna(method='ffill')
+
+
+                if ('Long' not in df1['FLAG_Long'].tolist()) and ('Short' not in df1['FLAG_Short'].tolist()):
+                    print('_____NO SIGNALS____')
+                    #time.sleep(60)
+                    continue
+
+                lot = trading_cap
+
+                trades = pd.DataFrame()
+
+                count=0
+                for i in range(1, len(df1)):
+
+                    if df1.loc[i, 'FLAG_Long'] == 'Long' and df1.loc[i-1, 'FLAG_Long'] != 'Long':
+
+                        df1.loc[i, 'LONG_am_stock_long'] = np.floor((lot/2)/df1.loc[i, 'y'])
+                        df1.loc[i, 'LONG_am_stock_short'] = np.floor((lot/2)/df1.loc[i, 'x'])*-1
+                        df1.loc[i, 'LONG_value_stock_long'] = df1.loc[i, 'LONG_am_stock_long'] * df1.loc[i, 'y']
+                        df1.loc[i, 'LONG_value_stock_short'] = df1.loc[i, 'LONG_am_stock_short'] * df1.loc[i,'x']
+
+                        trades.loc[count, 'Stock_Pair'] = pair_name
+                        trades.loc[count, 'Industry'] = industry
+                        trades.loc[count, 'Pair_history'] = history
+                        trades.loc[count, 'RF'] = Rec_f
+                        trades.loc[count, 'Period_param'] = sma
+                        trades.loc[count, 'Date_Open'] = df1.loc[i, 'Date']
+                        if Start_trading <= df1.loc[i, 'Date'] <= Stop_trading:
+                            trades.loc[count, 'Trade_in_period'] = 'Yes'
+                        else:
+                            trades.loc[count, 'Trade_in_period'] = 'No'
+                        trades.loc[count, 'Pair_coint_sort'] = pair_coint
+                        trades.loc[count, 'Stat_sort'] = spread_station
+                        trades.loc[count, 'Corr_sort'] = correlation
+                        trades.loc[count, 'Stat_Open'] = df1.loc[i, 'stat_spread']
+                        trades.loc[count, 'Pair_coint_Open'] = df1.loc[i, 'coint']
+                        trades.loc[count, 'Trade_Open'] = 'Long'
+                        trades.loc[count, 'LONG_ticker'] = tickers[1]
+                        trades.loc[count, 'LONG_am_stock'] = df1.loc[i, 'LONG_am_stock_long']
+                        trades.loc[count, 'LONG_stock_price'] = df1.loc[i, 'y']
+                        trades.loc[count, 'SHORT_ticker'] = tickers[0]
+                        trades.loc[count, 'SHORT_am_stock'] = df1.loc[i, 'LONG_am_stock_short']
+                        trades.loc[count, 'SHORT_stock_price'] = df1.loc[i, 'x']
+                        if tickers[0] in delisted_tickers:
+                            trades.loc[count, 'del_t_1'] = 'YES'
+                        else:
+                            trades.loc[count, 'del_t_1'] = 'NO'
+                        if tickers[1] in delisted_tickers:
+                            trades.loc[count, 'del_t_2'] = 'YES'
+                        else:
+                            trades.loc[count, 'del_t_2'] = 'NO'                        
+                        
+
+                    elif df1.loc[i, 'FLAG_Long'] == 'Long' and df1.loc[i-1, 'FLAG_Long'] == 'Long':
+                        df1.loc[i, 'LONG_am_stock_long'] = df1.loc[i-1, 'LONG_am_stock_long']
+                        df1.loc[i, 'LONG_am_stock_short'] = df1.loc[i-1, 'LONG_am_stock_short'] 
+                        df1.loc[i, 'LONG_value_stock_long'] = df1.loc[i, 'LONG_am_stock_long'] * df1.loc[i, 'y']
+                        df1.loc[i, 'LONG_value_stock_short'] = df1.loc[i, 'LONG_am_stock_short'] * df1.loc[i,'x']
+
+                    elif df1.loc[i, 'FLAG_Long'] != 'Long' and df1.loc[i-1, 'FLAG_Long'] == 'Long':
+                        df1.loc[i, 'LONG_am_stock_long'] = 0
+                        df1.loc[i, 'LONG_am_stock_short'] = 0
+                        df1.loc[i, 'LONG_value_stock_long'] = 0
+                        df1.loc[i, 'LONG_value_stock_short'] = 0
+                        df1.loc[i, 'SHORT_value_stock_long'] = 0
+                        df1.loc[i, 'SHORT_value_stock_short'] = 0
+
+                        trades.loc[count, 'Date_Close'] = df1.loc[i, 'Date']
+                        trades.loc[count, 'Stat_PV_Current'] = df1.loc[i, 'stat_spread']
+                        trades.loc[count, 'Pair_coint_Current'] = df1.loc[i, 'coint']               
+                        trades.loc[count, 'Trade_Close'] = 'Close_Long'
+                        trades.loc[count, 'LONG_stock_price_close'] = df1.loc[i, 'y']
+                        trades.loc[count, 'SHORT_stock_price_close'] = df1.loc[i, 'x']
+
+                        count += 1 
+
+                    elif df1.loc[i, 'FLAG_Long'] == 'Close Long':
+                        df1.loc[i, 'LONG_am_stock_long'] = 0
+                        df1.loc[i, 'LONG_am_stock_short'] = 0
+                        df1.loc[i, 'LONG_value_stock_long'] = 0
+                        df1.loc[i, 'LONG_value_stock_short'] = 0
+
+                    if df1.loc[i, 'FLAG_Short'] == 'Short' and df1.loc[i-1, 'FLAG_Short'] != 'Short':
+
+                        df1.loc[i, 'SHORT_am_stock_long'] = np.floor((lot/2)/df1.loc[i, 'x'])
+                        df1.loc[i, 'SHORT_am_stock_short'] = np.floor((lot/2)/df1.loc[i, 'y'])*-1
+                        df1.loc[i, 'SHORT_value_stock_long'] = df1.loc[i, 'SHORT_am_stock_long'] * df1.loc[i, 'x']
+                        df1.loc[i, 'SHORT_value_stock_short'] = df1.loc[i, 'SHORT_am_stock_short'] * df1.loc[i,'y']
+
+                        trades.loc[count, 'Stock_Pair'] = pair_name
+                        trades.loc[count, 'Industry'] = industry
+                        trades.loc[count, 'Pair_history'] = history
+                        trades.loc[count, 'RF'] = Rec_f
+                        trades.loc[count, 'Period_param'] = sma
+                        trades.loc[count, 'Date_Open'] = df1.loc[i, 'Date']
+                        if Start_trading <= df1.loc[i, 'Date'] <= Stop_trading:
+                            trades.loc[count, 'Trade_in_period'] = 'Yes'
+                        else:
+                            trades.loc[count, 'Trade_in_period'] = 'No'
+                        trades.loc[count, 'Pair_coint_sort'] = pair_coint
+                        trades.loc[count, 'Stat_sort'] = spread_station
+                        trades.loc[count, 'Corr_sort'] = correlation
+                        trades.loc[count, 'Stat_Open'] = df1.loc[i, 'stat_spread']
+                        trades.loc[count, 'Pair_coint_Open'] = df1.loc[i, 'coint']
+                        trades.loc[count, 'Trade_Open'] = 'Short'
+                        trades.loc[count, 'LONG_ticker'] = tickers[0]
+                        trades.loc[count, 'LONG_am_stock'] = df1.loc[i, 'SHORT_am_stock_long']
+                        trades.loc[count, 'LONG_stock_price'] = df1.loc[i, 'x']
+                        trades.loc[count, 'SHORT_ticker'] = tickers[1]
+                        trades.loc[count, 'SHORT_am_stock'] = df1.loc[i, 'SHORT_am_stock_short']
+                        trades.loc[count, 'SHORT_stock_price'] = df1.loc[i, 'y']  
+                        
+                        if tickers[0] in delisted_tickers:
+                            trades.loc[count, 'del_t_1'] = 'YES'
+                        else:
+                            trades.loc[count, 'del_t_1'] = 'NO'
+                        if tickers[1] in delisted_tickers:
+                            trades.loc[count, 'del_t_2'] = 'YES'
+                        else:
+                            trades.loc[count, 'del_t_2'] = 'NO'  
+
+                    elif df1.loc[i, 'FLAG_Short'] == 'Short' and df1.loc[i-1, 'FLAG_Short'] == 'Short':
+                        df1.loc[i, 'SHORT_am_stock_long'] = df1.loc[i-1, 'SHORT_am_stock_long']
+                        df1.loc[i, 'SHORT_am_stock_short'] = df1.loc[i-1, 'SHORT_am_stock_short']
+                        df1.loc[i, 'SHORT_value_stock_long'] = df1.loc[i, 'SHORT_am_stock_long'] * df1.loc[i, 'x']
+                        df1.loc[i, 'SHORT_value_stock_short'] = df1.loc[i, 'SHORT_am_stock_short'] * df1.loc[i,'y']
+
+                    elif df1.loc[i, 'FLAG_Short'] != 'Short' and df1.loc[i-1, 'FLAG_Short'] == 'Short':
+                        df1.loc[i, 'SHORT_am_stock_long'] = 0
+                        df1.loc[i, 'SHORT_am_stock_short'] = 0
+                        df1.loc[i, 'SHORT_value_stock_long'] = 0
+                        df1.loc[i, 'SHORT_value_stock_short'] = 0
+                        df1.loc[i, 'LONG_value_stock_long'] = 0
+                        df1.loc[i, 'LONG_value_stock_short'] = 0
+
+                        trades.loc[count, 'Date_Close'] = df1.loc[i, 'Date']
+                        trades.loc[count, 'Stat_PV_Current'] = df1.loc[i, 'stat_spread']
+                        trades.loc[count, 'Pair_coint_Current'] = df1.loc[i, 'coint']
+                        trades.loc[count, 'Trade_Close'] = 'Close_Short'
+                        trades.loc[count, 'LONG_stock_price_close'] = df1.loc[i, 'x']
+                        trades.loc[count, 'SHORT_stock_price_close'] = df1.loc[i, 'y']
+
+                        count += 1 
+
+                    elif df1.loc[i, 'FLAG_Short'] == 'Close Short':
+                        df1.loc[i, 'SHORT_am_stock_long'] = 0
+                        df1.loc[i, 'SHORT_am_stock_short'] = 0        
+                        df1.loc[i, 'SHORT_value_stock_long'] = 0
+                        df1.loc[i, 'SHORT_value_stock_short'] = 0 
+
+                trades = trades[(trades['LONG_am_stock'] != 0)&(trades['SHORT_am_stock'] != 0)]
+                trades = trades[(trades['Date_Open'] >= Start_trading.strftime('%Y-%m-%d')) & (trades['Date_Open'] <= Stop_trading.strftime('%Y-%m-%d'))]
+                print('Trades in ', len(trades))
+
+                df1['Spread_value'] = df1['SHORT_value_stock_long'] + df1['SHORT_value_stock_short'] + df1['LONG_value_stock_long']  + df1['LONG_value_stock_short']
+                df1['Trade_res'] = np.nan
+                for i in range(1, len(df1)):
+                    if df1.loc[i, 'Spread_value'] != 0 and df1.loc[i-1, 'Spread_value'] == 0:
+                        df1.loc[i, 'start_price'] = df1.loc[i, 'Spread_value']
+                    elif df1.loc[i, 'Spread_value'] != 0 and df1.loc[i-1, 'start_price'] != 0:
+                        df1.loc[i, 'start_price'] = df1.loc[i-1, 'start_price']
+                    elif df1.loc[i, 'Spread_value'] == 0 and df1.loc[i-1, 'Spread_value'] != 0 and df1.loc[i-1, 'start_price'] != 0:
+                        df1.loc[i, 'start_price'] = 0
+                    else:
+                        df1.loc[i, 'start_price'] = 0
+                    df1.loc[i, 'Net_spread_value'] = df1.loc[i, 'Spread_value'] - df1.loc[i, 'start_price'] 
+
+                    if df1.loc[i, 'Spread_value'] == 0 and df1.loc[i-1, 'Spread_value'] != 0:
+                        df1.loc[i, 'Trade_res'] = df1.loc[i-1, 'Net_spread_value']
+                    else:    
+                        df1.loc[i, 'Trade_res'] = 0
+
+                df1['cum rets'] = df1['Trade_res'].cumsum()
+                df1['trading_cap'] = lot
+                df1['equity'] = df1['Net_spread_value'] + df1['cum rets'] + df1['trading_cap']
+
+                try:
+                    trades['Rezult'] = (trades['LONG_stock_price_close'] - trades['LONG_stock_price']) * trades['LONG_am_stock'] + (trades['SHORT_stock_price_close'] - trades['SHORT_stock_price']) * trades['SHORT_am_stock']
+                    trades['Cum_Rezult'] = trades['Rezult'].cumsum()
+                    trades['Days_in_Trade'] = trades['Date_Close'] - trades['Date_Open']
+                    trades['Date_Open']=pd.to_datetime(trades['Date_Open']).dt.date
+                    df1['Date'] = pd.to_datetime(df1['Date']).dt.date
+
+
+                    for s in range(len(trades)):
+                        ope_n = trades.loc[s, 'Date_Open']
+                        if pd.isna(trades.loc[s, 'Date_Close']) == True:
+                            continue
+                            #clo_se = datetime.datetime.now()
+                        else:
+                            clo_se = trades.loc[s, 'Date_Close']
+                        temp_df = df1[(df1['Date'] >= ope_n) & (df1['Date'] <= clo_se)]
+                        temp_df.reset_index(inplace=True)
+                        trades.loc[s, 'Max_Drawdown'] = round(temp_df['Net_spread_value'].min(),2)
+                except:
+                    pass
+
+                #print('Длина trades ', len(trades))
+                
+                print(f"--TRADES for {pair_name} -- ready! ", ' time -', (time.time() - coint_time)//60, 'минут', round((time.time() - coint_time)%60, 2), 'секунд')
+
+                FT_portfolio_trades = pd.concat([FT_portfolio_trades, trades], axis = 0)
+                #print('___PAUSE___')
+                #time.sleep(10)
+
+            print(file, ' is done!')
+
+        FT_portfolio_trades.sort_values(by=['Date_Open', 'Stock_Pair'],  inplace = True)
+        FT_portfolio_trades.reset_index(inplace=True, drop=True)
+        FT_portfolio_trades['Cum_Rezult'] = FT_portfolio_trades['Rezult'].cumsum()
+
+        print()
+        print('FT_portfolio_trades is Ready')
+        print()
+
+        table = FT_portfolio_trades.copy()
+        portfolio_dinamic = pd.DataFrame()
+
+        ind_x = table.index[-1]
+        end = table['Date_Close'].max().date()
+        #end = datetime.datetime.now().date()
+        for i in range((end - table.loc[0, 'Date_Open']).days+3):
+            if (table.loc[0, 'Date_Open'] + pd.Timedelta(i, unit='D')).weekday() not in [5, 6]:
+                portfolio_dinamic.loc[i, 'Date'] = table.loc[0, 'Date_Open'] + pd.Timedelta(i, unit='D')
+
+        portfolio_dinamic.reset_index(inplace=True, drop=True)
+        portfolio_dinamic['Date'] = pd.to_datetime(portfolio_dinamic['Date'])
+
+        for r in range(len(table)):
+            columns_list = portfolio_dinamic.columns.tolist()
+            name = table.loc[r, 'Stock_Pair']
+            name_orig = table.loc[r, 'Stock_Pair']
+            if name in columns_list:
+                name = name + '_' + str(r)
+            open_date = table.loc[r, 'Date_Open']
+
+            close_date = table.loc[r, 'Date_Close']
+            if pd.isnull(close_date) == True:
+                close_date = datetime.date.today()
+            ticker_Long = table.loc[r, 'LONG_ticker']
+            ticker_Short = table.loc[r, 'SHORT_ticker']
+            am_long = table.loc[r, 'LONG_am_stock']
+            am_short = table.loc[r, 'SHORT_am_stock']
+            price_long = table.loc[r, 'LONG_stock_price']
+            price_short = table.loc[r, 'SHORT_stock_price']
+
+            symbol_1 = pd.read_csv(f'c:\\Users\\VladV\\Documents\\StocksPair\\Stock_DATA\\{ticker_Long}.csv')
+            symbol_2 = pd.read_csv(f'c:\\Users\\VladV\\Documents\\StocksPair\\Stock_DATA\\{ticker_Short}.csv')
+
+            symbol_1['Date'] = pd.to_datetime(symbol_1['Date'])
+            symbol_2['Date'] = pd.to_datetime(symbol_2['Date'])
+
+            symbol_1.drop(['Open', 'High', 'Low', 'Adj Close', 'Volume'], axis = 1, inplace=True)
+            symbol_2.drop(['Open', 'High', 'Low', 'Adj Close', 'Volume'], axis = 1, inplace=True)
+
+            symbol_1.set_index('Date',  inplace=True)
+            symbol_2.set_index('Date',  inplace=True)
+
+            symbol_1.rename(columns = {'Close': ticker_Long}, inplace=True)
+            symbol_2.rename(columns = {'Close':ticker_Short}, inplace=True)
+
+            data = symbol_1.merge(symbol_2, left_on='Date', right_on='Date')
+
+            for q in range(len(portfolio_dinamic)):
+                if open_date <= portfolio_dinamic.loc[q, 'Date'] < close_date:
+                    try:
+                        long_res = (data[data.index == portfolio_dinamic.loc[q, 'Date']][ticker_Long][0] - price_long) * am_long
+                        short_res = (price_short - data[data.index == portfolio_dinamic.loc[q, 'Date']][ticker_Short][0]) * am_short * -1
+                        portfolio_dinamic.loc[q, name] = long_res + short_res
+                    except:
+                        pass
+                elif portfolio_dinamic.loc[q, 'Date'] == close_date:
+                    long_res = ( table.loc[r, 'LONG_stock_price_close'] - price_long) * am_long
+                    short_res = (price_short - table.loc[r, 'SHORT_stock_price_close']) * am_short * -1
+                    portfolio_dinamic.loc[q, name] = long_res + short_res
+
+                else:
+                    portfolio_dinamic.loc[q, name] = 0
+            #portfolio_dinamic.rename(columns={name: name_orig}, inplace=True)
+
+        portfolio_dinamic.fillna(method='ffill', inplace=True)
+
+        col_list = portfolio_dinamic.columns.tolist()
+        pairs_list=col_list[1:]        
+
+        portfolio_dinamic['SUM'] = portfolio_dinamic[1:].sum(numeric_only=True, axis=1)   
+        
+        portfolio_dinamic['Fixed_res'] = 0
+        for col in col_list:
+            for c in range(1, len(portfolio_dinamic)):
+                if portfolio_dinamic.loc[c, col] == 0 and portfolio_dinamic.loc[c-1, col] != 0:
+                    #portfolio_dinamic.loc[len(portfolio_dinamic)+1, col] = portfolio_dinamic.loc[c-1, col]
+                    if portfolio_dinamic.loc[c, 'Fixed_res'] == 0: 
+                        portfolio_dinamic.loc[c, 'Fixed_res'] = portfolio_dinamic.loc[c-1, col]
+                    elif portfolio_dinamic.loc[c, 'Fixed_res'] != 0: 
+                        portfolio_dinamic.loc[c, 'Fixed_res'] = portfolio_dinamic.loc[c, 'Fixed_res'] + portfolio_dinamic.loc[c-1, col]
+
+        portfolio_dinamic['Cum_Fixed_res'] = portfolio_dinamic['Fixed_res'].cumsum()
+        portfolio_dinamic['Equity'] = portfolio_dinamic['SUM'] + portfolio_dinamic['Cum_Fixed_res']
+        
+        portfolio_dinamic['Peak_income'] = 0
+        for s in range(1, len(portfolio_dinamic)):
+            portfolio_dinamic.loc[s, 'Peak_income'] = max(portfolio_dinamic.loc[s-1, 'Peak_income'], portfolio_dinamic.loc[s, 'Equity'])
+            if portfolio_dinamic.loc[s, 'Equity'] < portfolio_dinamic.loc[s, 'Peak_income']:
+                portfolio_dinamic.loc[s, 'Drawdown'] = portfolio_dinamic.loc[s, 'Equity'] - portfolio_dinamic.loc[s-1, 'Peak_income']
+            elif portfolio_dinamic.loc[s, 'Equity'] >= portfolio_dinamic.loc[s, 'Peak_income']:
+                portfolio_dinamic.loc[s, 'Drawdown'] = 0
+        
+        print()
+        print('portfolio_dinamic is Ready')
+        print()
+
+        capital = pd.DataFrame()
+
+        ind_x = table.index[-1]
+        end = table['Date_Close'].max().date()
+        #end=datetime.datetime.now().date()
+        #for i in range((datetime.datetime.today().date() - table.loc[0, 'Date_Open'].date()).days):
+        for i in range((end - table.loc[0, 'Date_Open']).days+3):
+            if (table.loc[0, 'Date_Open'] + pd.Timedelta(i, unit='D')).weekday() not in [5, 6]:
+                capital.loc[i, 'Date'] = table.loc[0, 'Date_Open'] + pd.Timedelta(i, unit='D')
+
+        capital.reset_index(inplace=True, drop=True)
+        capital['Date'] = pd.to_datetime(capital['Date'])
+
+        for r in range(len(table)):
+            columns_list = capital.columns.tolist()
+            name = table.loc[r, 'Stock_Pair']
+            name_orig = table.loc[r, 'Stock_Pair']
+            if name in columns_list:
+                name = name + '_' + str(r)
+            open_date = table.loc[r, 'Date_Open']
+            close_date = table.loc[r, 'Date_Close']
+            if pd.isnull(close_date) == True:
+                close_date = datetime.date.today()
+            ticker_Long = table.loc[r, 'LONG_ticker']
+            ticker_Short = table.loc[r, 'SHORT_ticker']
+            am_long = table.loc[r, 'LONG_am_stock']
+            am_short = table.loc[r, 'SHORT_am_stock']
+            price_long = table.loc[r, 'LONG_stock_price']
+            price_short = table.loc[r, 'SHORT_stock_price']
+
+            symbol_1 = pd.read_csv(f'c:\\Users\\VladV\\Documents\\StocksPair\\Stock_DATA\\{ticker_Long}.csv')
+            symbol_2 = pd.read_csv(f'c:\\Users\\VladV\\Documents\\StocksPair\\Stock_DATA\\{ticker_Short}.csv')
+
+            symbol_1['Date'] = pd.to_datetime(symbol_1['Date'])
+            symbol_2['Date'] = pd.to_datetime(symbol_2['Date'])
+
+            symbol_1.drop(['Open', 'High', 'Low', 'Adj Close', 'Volume'], axis = 1, inplace=True)
+            symbol_2.drop(['Open', 'High', 'Low', 'Adj Close', 'Volume'], axis = 1, inplace=True)
+
+            symbol_1.set_index('Date',  inplace=True)
+            symbol_2.set_index('Date',  inplace=True)
+
+            symbol_1.rename(columns = {'Close': ticker_Long}, inplace=True)
+            symbol_2.rename(columns = {'Close':ticker_Short}, inplace=True)
+
+            data = symbol_1.merge(symbol_2, left_on='Date', right_on='Date')
+
+            for q in range(len(capital)):
+                if open_date <= capital.loc[q, 'Date'] < close_date:
+                    try:
+                        long_value = (data[data.index == capital.loc[q, 'Date']][ticker_Long][0]) * am_long
+                        short_value = (data[data.index == capital.loc[q, 'Date']][ticker_Short][0]) * am_short * -1
+                        capital.loc[q, name] = long_value + short_value
+                    except:
+                        pass
+                elif capital.loc[q, 'Date'] == close_date:
+                    long_value = ( table.loc[r, 'LONG_stock_price_close'] ) * am_long
+                    short_value = ( table.loc[r, 'SHORT_stock_price_close']) * am_short * -1
+                    capital.loc[q, name] = long_value + short_value
+
+                else:
+                    capital.loc[q, name] = 0
+            capital.rename(columns={name: name_orig}, inplace=True)
+        capital.fillna(method ='ffill', inplace = True)            
+
+        print()
+        print('capital is Ready')
+        print()
+
+        stat_table = pd.DataFrame()
+
+        ind_x = table.index[-1]
+        end = table['Date_Close'].max().date()
+        #end = datetime.datetime.now().date()
+        #for i in range((datetime.datetime.today().date() - table.loc[0, 'Date_Open'].date()).days):
+        for i in range((end - table.loc[0, 'Date_Open']).days+3):
+            if (table.loc[0, 'Date_Open'] + pd.Timedelta(i, unit='D')).weekday() not in [5, 6]:
+                stat_table.loc[i, 'Date'] = table.loc[0, 'Date_Open'] + pd.Timedelta(i, unit='D')
+
+        stat_table.reset_index(inplace=True, drop=True)
+        stat_table['Date'] = pd.to_datetime(stat_table['Date'])
+
+        for r in range(len(table)):
+            columns_list = stat_table.columns.tolist()
+            name = table.loc[r, 'Stock_Pair']
+            name_orig = table.loc[r, 'Stock_Pair']
+            if name in columns_list:
+                name = name + '_' + str(r)
+            open_date = table.loc[r, 'Date_Open']
+            close_date = table.loc[r, 'Date_Close']
+            if pd.isnull(close_date) == True:
+                close_date = datetime.date.today()
+            pair = table.loc[r, 'Stock_Pair']
+    #         ticker_Long = table.loc[r, 'LONG_ticker']
+    #         ticker_Short = table.loc[r, 'SHORT_ticker']
+    #         am_long = table.loc[r, 'LONG_am_stock']
+    #         am_short = table.loc[r, 'SHORT_am_stock']
+    #         price_long = table.loc[r, 'LONG_stock_price']
+    #         price_short = table.loc[r, 'SHORT_stock_price']
+
+            ticker_1 = pair.split('-')[0]
+            ticker_2 = pair.split('-')[1]
+
+            symbol_1 = pd.read_csv(f'c:\\Users\\VladV\\Documents\\StocksPair\\Stock_DATA\\{ticker_1}.csv')
+            symbol_2 = pd.read_csv(f'c:\\Users\\VladV\\Documents\\StocksPair\\Stock_DATA\\{ticker_2}.csv')
+
+            symbol_1['Date'] = pd.to_datetime(symbol_1['Date'])
+            symbol_2['Date'] = pd.to_datetime(symbol_2['Date'])
+
+            symbol_1.drop(['Open', 'High', 'Low', 'Adj Close', 'Volume'], axis = 1, inplace=True)
+            symbol_2.drop(['Open', 'High', 'Low', 'Adj Close', 'Volume'], axis = 1, inplace=True)
+
+            symbol_1.set_index('Date',  inplace=True)
+            symbol_2.set_index('Date',  inplace=True)
+
+            symbol_1.rename(columns = {'Close': ticker_1}, inplace=True)
+            symbol_2.rename(columns = {'Close': ticker_2}, inplace=True)
+
+            data = symbol_1.merge(symbol_2, left_on='Date', right_on='Date')
+            data['Spread'] = data[ticker_2] / data[ticker_1]
+
+            for q in range(len(stat_table)):
+                if open_date <= stat_table.loc[q, 'Date'] <= close_date:
+                    try:
+                        end_p = stat_table.loc[q, 'Date']
+                        start_p = end_p - pd.Timedelta(365 * year_s, unit = 'd')
+                        data_temp = data[(data.index >= start_p) & (data.index <= end_p)]
+                        #print('len(data_temp)=',len(data_temp))
+                        #stat_table.loc[q, name] = round(ts.adfuller(data_temp['Spread'])[1],4)
+                        data_temp = normalize_and_accumulate_series(data_temp)
+                        data_temp = data_temp[2:]
+                        stat_table.loc[q, name] = round(sm.tsa.stattools.coint(data_temp[ticker_2], data_temp[ticker_1])[1],4)
+                    except:
+                        pass
+                else:
+                    stat_table.loc[q, name] = 0
+            stat_table.rename(columns={name: name_orig}, inplace=True)
+        stat_table.fillna(method ='ffill', inplace = True)       
+
+        print()
+        print('stat_table is Ready')
+        print()
+
+        table = table[['Stock_Pair',
+                       'Industry',
+                      'Corr_sort',
+                      'Pair_coint_sort',
+                      'Stat_sort', 
+                      'Date_Open',
+                      'Trade_in_period',
+                      'Trade_Open',
+                      'Pair_coint_Open',
+                      'Stat_Open',         
+                      'LONG_ticker',
+                      'LONG_am_stock',
+                      'LONG_stock_price',
+                      'SHORT_ticker',
+                      'SHORT_am_stock',
+                      'SHORT_stock_price',
+                      'Date_Close',
+                      'Pair_coint_Current',
+                      'Stat_PV_Current',         
+                      'Trade_Close',
+                      'LONG_stock_price_close',
+                      'SHORT_stock_price_close',
+                      'Rezult',
+                      'Cum_Rezult',
+                      'Days_in_Trade',
+                      'Max_Drawdown',
+                      'Period_param',
+                      'Pair_history',
+                       'RF',
+                       'del_t_1',
+                       'del_t_2'
+                              ]]
+
+        spec = pd.DataFrame()
+        spec.loc[0, 'Desc'] = 'Testing period start'
+        spec.loc[0, 'Value'] = table['Date_Open'].min().year
+        spec.loc[1, 'Desc'] = 'Testing period finish'
+        spec.loc[1, 'Value'] = table['Date_Close'].max().year
+        spec.loc[2, 'Desc'] = 'Окно бэк-теста для FT'
+        spec.loc[2, 'Value'] = year_s
+        spec.loc[3, 'Desc'] = 'Окно расчета коэффициентов'
+        spec.loc[3, 'Value'] = year_s
+        spec.loc[4, 'Desc'] = 'Param'
+        spec.loc[4, 'Value'] = param
+        spec.loc[5, 'Desc'] = 'Отбор пар:'
+        spec.loc[5, 'Value'] = np.nan
+        spec.loc[6, 'Desc'] = 'Порог по Coint p-value'
+        spec.loc[6, 'Value'] = 0.07
+        spec.loc[7, 'Desc'] = 'Порог по Correlation'
+        spec.loc[7, 'Value'] = 0.90
+        spec.loc[8, 'Desc'] = 'Порог по Stationarity p-value'
+        spec.loc[8, 'Value'] = 0.05
+        spec.loc[9, 'Desc'] = 'Трейды:'
+        spec.loc[9, 'Value'] = np.nan
+        spec.loc[10, 'Desc'] = 'zScore триггер для входа'
+        spec.loc[10, 'Value'] = '+/-' + str(upper_level)
+        spec.loc[11, 'Desc'] = 'Stat_PValue триггер для входа'
+        spec.loc[11, 'Value'] = PValue_limit_in        
+        spec.loc[12, 'Desc'] = 'zScore триггер для выхода'
+        spec.loc[12, 'Value'] = '-/+' + str(exitZscore_Long)
+        spec.loc[13, 'Desc'] = 'Stat_PValue триггер для выхода'
+        spec.loc[13, 'Value'] = PValue_limit_out 
+        spec.loc[14, 'Desc'] = 'Max Days-in-Trade limit'
+        spec.loc[14, 'Value'] =  DIT_Lim
+        spec.loc[15, 'Desc'] = 'Stop Loss'
+        spec.loc[15, 'Value'] = 'нет'
+        spec.loc[16, 'Desc'] = 'coint_change'
+        spec.loc[16, 'Value'] = coint_change
+        spec.loc[17, 'Desc'] = 'RF_Level_BT_Check'
+        spec.loc[17, 'Value'] = RF_Level
+        spec.loc[18, 'Desc'] = 'Stat_Open_Check'
+        spec.loc[18, 'Value'] = coint_open_check
+
+        try:
+            Full_coint_pairs.drop('Unnamed: 0', axis = 1, inplace = True)
+        except:
+            pass
+        
+        Full_coint_pairs.reset_index(drop=True, inplace = True)
+
+        table['Date_Open'] = pd.to_datetime(table['Date_Open']).dt.date
+        table['Date_Close'] = pd.to_datetime(table['Date_Close']).dt.date
+
+        s = table['Date_Open'].min().year
+        f = table['Date_Open'].max().year
+
+        list_df = [spec, portfolio_dinamic, capital, stat_table, table, Full_coint_pairs]
+        list_df_sheet_names = ['Specification','portfolio_dinamic', 'capital', 'stat_params_table', 'trades_table', 'stock_pairs']
+
+        if os.path.exists(f'FT_HL_{s}_{f}_RF_{RF_Level}_CC_{coint_change}_delisted_stocks_v1.xlsx') == True:    
+            with pd.ExcelWriter(f'FT_HL_{s}_{f}_RF_{RF_Level}_CC_{coint_change}_delisted_stocks_v1.xlsx') as writer: 
+                list_df[0].to_excel(writer, sheet_name=list_df_sheet_names[0])
+                list_df[1].to_excel(writer, sheet_name=list_df_sheet_names[1])
+                list_df[2].to_excel(writer, sheet_name=list_df_sheet_names[2])
+                list_df[3].to_excel(writer, sheet_name=list_df_sheet_names[3])
+                list_df[4].to_excel(writer, sheet_name=list_df_sheet_names[4])
+                list_df[5].to_excel(writer, sheet_name=list_df_sheet_names[5])
+#                 list_df[6].to_excel(writer, sheet_name=list_df_sheet_names[6])
+
+
+        else:
+            shutil.copyfile(f'c:\\Users\\VladV\\Documents\\StocksPair\\Test_rezult\\Forward_Test_062022\\Книга1.xlsx', 
+                            f'FT_HL_{s}_{f}_RF_{RF_Level}_CC_{coint_change}_delisted_stocks_v1.xlsx')
+            with pd.ExcelWriter(f'FT_HL_{s}_{f}_RF_{RF_Level}_CC_{coint_change}_delisted_stocks_v1.xlsx') as writer: 
+                list_df[0].to_excel(writer, sheet_name=list_df_sheet_names[0])
+                list_df[1].to_excel(writer, sheet_name=list_df_sheet_names[1])
+                list_df[2].to_excel(writer, sheet_name=list_df_sheet_names[2])
+                list_df[3].to_excel(writer, sheet_name=list_df_sheet_names[3])
+                list_df[4].to_excel(writer, sheet_name=list_df_sheet_names[4])
+                list_df[5].to_excel(writer, sheet_name=list_df_sheet_names[5])
+#                 list_df[6].to_excel(writer, sheet_name=list_df_sheet_names[6])
+        print()
+        print(f'___файл для __{year}_года_param-{year_s}_PV_{PValue_limit_out}____записан')
+        print()
+print('СКРИПТ ВЫПОЛНЕН')
+print('Времы выполнения скрипта:', (time.time() - start_time)//60, 'минут', round((time.time() - start_time)%60, 2), 'секунд')
